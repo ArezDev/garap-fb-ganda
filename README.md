@@ -1,1 +1,1 @@
-npm i puppeteer readline fs axios path
+npm i puppeteer-extra readline fs puppeteer-extra-plugin-stealth
