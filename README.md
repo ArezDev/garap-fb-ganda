@@ -1,1 +1,1 @@
-npm i puppeteer readline fs axios
+npm i puppeteer readline fs axios path

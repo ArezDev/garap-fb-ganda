@@ -254,12 +254,8 @@ async function runJob(page, uidList, uidTag) {
 
     const uidBatches = collectUIDsPerAccount(accounts.length);
 
-    for (let i = 0; i < accounts.length; i++) {
-      const acc = accounts[i];
+    await Promise.all(accounts.map(async (acc, i) => {
       const uidBatch = uidBatches[i];
-
-      console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
-
       const browser = await puppeteer.launch({
         headless: false,
         executablePath: CHROME_PATH,
@@ -273,48 +269,44 @@ async function runJob(page, uidList, uidTag) {
         ignoreDefaultArgs: ['--enable-automation']
       });
 
-      await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY)); // Delay antar browser
+      await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY));
 
-      (async () => {
-        try {
-          let retry = 0;
-          let success = false;
-
-          while (retry < 3 && !success) {
-            try {
-              const page = await preparePage(browser, acc);
-              await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY)); // Delay antar job
-              await runJob(page, uidBatch, acc.uid);
-              markProcessed(acc.raw);
-              success = true;
-              break;
-            } catch (err) {
-              retry++;
-              console.warn(`[${acc.uid}] ❌ Gagal runJob (attempt ${retry}):`, err.message);
-              if (!err.message.includes('Terlogout') || retry >= 3) throw err;
-              console.log(`[${acc.uid}] 🔁 Retry login & ulangi proses...`);
-            }
+      try {
+        let retry = 0;
+        let success = false;
+        while (retry < 3 && !success) {
+          try {
+            const page = await preparePage(browser, acc);
+            await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY));
+            await runJob(page, uidBatch, acc.uid);
+            markProcessed(acc.raw);
+            success = true;
+            break;
+          } catch (err) {
+            retry++;
+            console.warn(`[${acc.uid}] ❌ Gagal runJob (attempt ${retry}):`, err.message);
+            if (!err.message.includes('Terlogout') || retry >= 3) throw err;
+            console.log(`[${acc.uid}] 🔁 Retry login & ulangi proses...`);
           }
-
-          if (!success) throw new Error('Gagal setelah 3x retry');
-        } catch (e) {
-          console.error(`[${acc.uid}] :`, e.message);
-          if (uidBatch.length) {
-            const remainingLines = fs.readFileSync('uid.txt', 'utf8');
-            const line = uidBatch.join('|');
-            fs.writeFileSync('uid.txt', line + '\n' + remainingLines);
-          }
-          appendFileSync('akun-gagal.txt', acc.raw + '\n');
-          const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
-          const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
-          fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
-        } finally {
-          await browser.close();
         }
-      })();
-    }
+        if (!success) throw new Error('Gagal setelah 3x retry');
+      } catch (e) {
+        console.error(`[${acc.uid}] :`, e.message);
+        if (uidBatch.length) {
+          const remainingLines = fs.readFileSync('uid.txt', 'utf8');
+          const line = uidBatch.join('|');
+          fs.writeFileSync('uid.txt', line + '\n' + remainingLines);
+        }
+        appendFileSync('akun-gagal.txt', acc.raw + '\n');
+        const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
+        const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
+        fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
+      } finally {
+        await browser.close();
+      }
+    }));
 
-    // Optional: Delay antar batch
+    // Optional delay antar batch
     if (BROWSER_LAUNCH_DELAY) await new Promise(r => setTimeout(r, BROWSER_LAUNCH_DELAY));
   }
 
