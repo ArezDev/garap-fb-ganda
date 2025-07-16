@@ -146,13 +146,11 @@ async function preparePage(browser, acc) {
 }
 
 async function runJob(page, uidList, uidTag) {
-  const currentUrl = page.url();
-  if (currentUrl.includes("601051028565049")) {
-    const log = { uid: uidTag, status: "dismissed", waktu: waktu(), message: "Checkpoint automated behaviour" };
-    appendFileSync('akun-dismiss.txt', `${uidTag}\n`);
-    //appendFileSync('akun-log.jsonl', JSON.stringify(log) + '\n');
-    return; // skip this job but continue others
-  }
+  // const currentUrl = page.url();
+  // if (currentUrl.includes("601051028565049")) {
+  //   appendFileSync('akun-dismiss.txt', `${uidTag}\n`);
+  //   return;
+  // }
 
   await page.evaluate(async () => {
     const myHeaders = new Headers();
@@ -190,13 +188,12 @@ async function runJob(page, uidList, uidTag) {
   });
 
   try {
+    await new Promise(resolve => setTimeout(resolve, 5000));
     await page.goto('https://facebook.com/?sk=welcome');
     await page.waitForNavigation({ timeout: 15000 });
   } catch (_) {}
 
   if (!/sk=welcome/.test(page.url())) {
-    const log = { uid: uidTag, status: "failed", waktu: waktu(), message: "Switch clone FB gagal" };
-    //appendFileSync('akun-log.jsonl', JSON.stringify(log) + '\n');
     throw new Error('Switch clone FB gagal');
   }
 
@@ -206,73 +203,98 @@ async function runJob(page, uidList, uidTag) {
 
   return new Promise((resolve, reject) => {
     const tag = `[${uidTag}]`;
+
     const listener = msg => {
       const t = msg.text();
-      if (!(t.startsWith(tag + ' done') || t.startsWith('[AREZ] done'))) return;
+      if (!(t.startsWith(tag + ' done') || t.startsWith('[AREZ] done') || t.startsWith(`${tag} : {`))) return;
+
       page.off('console', listener);
       try {
-        const data = JSON.parse(t.replace(/^[^\]]+\] done\s*/, ''));
+        const data = JSON.parse(t.replace(/^[^\]]+\] done\s*/, '').replace(`${tag} : `, ''));
+
+        if (data?.status === 'dismissed') {
+          appendFileSync('akun-dismiss.txt', `${uidTag}\n`);
+          return resolve({ status: 'dismissed' });
+        }
+
+        if (data?.status === 'logout') {
+          appendFileSync('akun-logout.txt', `${uidTag}\n`);
+          return resolve({ status: 'logout' });
+        }
+
         console.log(`${waktu()}${tag}`, data);
-        //appendFileSync('akun-log.jsonl', JSON.stringify({ uid: uidTag, status: "success", waktu: waktu(), data }) + '\n');
         resolve(data);
+
       } catch (e) {
-        const errlog = { uid: uidTag, status: "parse_error", waktu: waktu(), message: e.message };
-        //appendFileSync('akun-log.jsonl', JSON.stringify(errlog) + '\n');
         reject(new Error('Parse JSON done gagal'));
       }
     };
+
     page.on('console', listener);
+
     page.evaluate(async (list, uidTag) => {
       const tag = `[${uidTag}]`;
       const cfg = window.AREZDEV_CONFIG || {};
+
       function waktu() {
         const now = new Date();
         const hh = String(now.getHours()).padStart(2, '0');
         const mm = String(now.getMinutes()).padStart(2, '0');
         return `[ ${hh}:${mm} ]`;
       }
+
       function isLoggedOut() {
         const EMAIL_SEL = ['#email', 'input[name="email"]', 'input[id="m_login_email"]'];
         const PASS_SEL = ['#pass', 'input[name="pass"]', 'input[id="m_login_password"]'];
-        const emailFound = EMAIL_SEL.some(sel => document.querySelector(sel));
-        const passFound = PASS_SEL.some(sel => document.querySelector(sel));
-        return (emailFound && passFound);
+        return EMAIL_SEL.some(sel => document.querySelector(sel)) &&
+               PASS_SEL.some(sel => document.querySelector(sel));
       }
-      try {
-        if (!window.arezdev) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "script tidak tersedia, kemungkinan belum login" })}`);
-        if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout sebelum mulai workflow" })}`);
-        if (cfg.enableCreateGroups !== false) {
-          await window.arezdev.createGroups({ uidList: list, welcomeText: '' });
-          if (location.href.includes("601051028565049")) {
-            return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
+
+      async function safeAction(actionFn, context) {
+        try {
+          await actionFn();
+          if (location.href.includes("601051028565049") || location.href.includes("checkpoint")) {
+            return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed", context })}`);
           }
-          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat createGroups" })}`);
+          if (isLoggedOut()) {
+            return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat " + context, status: "logout", context })}`);
+          }
+        } catch (e) {
+          return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: e.message || 'error tidak diketahui', context })}`);
         }
+      }
+
+      try {
+        if (!window.arezdev) {
+          return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "script tidak tersedia, kemungkinan belum login" })}`);
+        }
+        if (isLoggedOut()) {
+          return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout sebelum mulai workflow", status: "logout" })}`);
+        }
+
+        if (cfg.enableCreateGroups !== false) {
+          await safeAction(() => window.arezdev.createGroups({ uidList: list, welcomeText: '' }), "createGroups");
+        }
+
         if (cfg.enableAddMembersToGroups) {
-          await window.arezdev.addMembersToAllGroups({ uidList: list, delay: cfg.delaySec || 1 });
+          await safeAction(() => window.arezdev.addMembersToAllGroups({ uidList: list, delay: cfg.delaySec || 1 }), "addMembers");
           if (cfg.addMemberWithText && Array.isArray(cfg.welcomeText) && cfg.welcomeText.length) {
             const txt = cfg.welcomeText[Math.floor(Math.random() * cfg.welcomeText.length)];
-            if (txt) await window.arezdev.messageAllGroups({ text: txt });
-            if (location.href.includes("601051028565049")) {
-              return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
-            }
+            if (txt) await safeAction(() => window.arezdev.messageAllGroups({ text: txt }), "messageAfterAdd");
           }
-          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat addMembers/message" })}`);
         }
+
         if (cfg.enableMessageAllGroups && !cfg.addMemberWithText) {
           if (Array.isArray(cfg.welcomeText) && cfg.welcomeText.length) {
             const txt = cfg.welcomeText[Math.floor(Math.random() * cfg.welcomeText.length)];
-            await window.arezdev.messageAllGroups({ text: txt });
-            if (location.href.includes("601051028565049")) {
-              return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
-            }
+            await safeAction(() => window.arezdev.messageAllGroups({ text: txt }), "messageOnly");
           }
-          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat messageAllGroups" })}`);
         }
+
         const ctx = window.__arezLast || {};
         console.log(`${waktu()}${tag} : ${JSON.stringify({ task: 'workflow', ...ctx })}`);
       } catch (e) {
-        console.log(`${waktu()}${tag} : ${JSON.stringify({ error: e.message || 'error tidak diketahui' })}`);
+        console.log(`${waktu()}${tag} : ${JSON.stringify({ error: e.message || 'error tidak diketahui', fatal: true })}`);
       }
     }, uidList, uidTag).catch(reject);
   });
