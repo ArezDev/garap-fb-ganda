@@ -9,6 +9,7 @@ const CHROME_PATH = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const BROWSER_LAUNCH_DELAY = (globalThis.AREZDEV_CONFIG?.browserLaunchDelaySec ?? 0) * 1000;
 const configCode = fs.readFileSync('./config.js', 'utf8');
 const arezCode = fs.readFileSync('./tools/inboxgrup.js', 'utf8');
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
 const waktu = () => {
   const now = new Date();
   const hh = String(now.getHours()).padStart(2, '0');
@@ -108,21 +109,7 @@ async function preparePage(browser, acc) {
     );
   }
   await page.goto('https://facebook.com/login', { waitUntil: 'domcontentloaded' });
-  if (/login(\.php)?/.test(page.url())) {
-    console.log(`${waktu()}[${uid}] : Cookie kedaluwarsa, login ulang:`);
-    if (!uid || !pass) throw Error('UID/PASS kosong');
-    const { emailSel, passSel } = await findLoginSelectors(page);
-    await page.type(emailSel, uid, { delay: 50 });
-    await page.type(passSel, pass, { delay: 50 });
-    await Promise.all([
-      page.keyboard.press('Enter'),
-      page.waitForNavigation({ waitUntil: 'networkidle2' })
-    ]);
-    if (/login(\.php)?/.test(page.url()))
-      throw Error('Login gagal – cek password atau checkpoint');
-    await new Promise(res => setTimeout(res, 15000));
-  }
-  if (/601051028565049/.test(page.url())) {
+  if (/601051028565049?/.test(page.url())) {
     console.log(`${waktu()}[${uid}]`, 'Akun dismiss, wait...');
     await page.evaluate(() => {
       fetch("/api/graphql/", {
@@ -140,7 +127,18 @@ async function preparePage(browser, acc) {
         "redirect": "follow"
       });
     });
-    await new Promise(res => setTimeout(res, 15000));
+  } else if (/login(\.php)?/.test(page.url())) {
+    console.log(`${waktu()}[${uid}] : Cookie kedaluwarsa, login ulang:`);
+    if (!uid || !pass) throw Error('UID/PASS kosong');
+    const { emailSel, passSel } = await findLoginSelectors(page);
+    await page.type(emailSel, uid, { delay: 50 });
+    await page.type(passSel, pass, { delay: 50 });
+    await Promise.all([
+      page.keyboard.press('Enter'),
+      page.waitForNavigation({ waitUntil: 'networkidle2' })
+    ]);
+    if (/login(\.php)?/.test(page.url()))
+      throw Error('Login gagal – cek password atau checkpoint');
   }
   
   await new Promise(res => setTimeout(res, 15000));
@@ -254,68 +252,55 @@ async function runJob(page, uidList, uidTag) {
 
     const uidBatches = collectUIDsPerAccount(accounts.length);
 
-    for (let i = 0; i < accounts.length; i++) {
-      const acc = accounts[i];
+    // Jalankan semua akun secara paralel
+    await Promise.all(accounts.map((acc, i) => new Promise(async (resolve) => {
       const uidBatch = uidBatches[i];
 
-      console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
+      try {
+        console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
 
-      const browser = await puppeteer.launch({
-        headless: false,
-        executablePath: CHROME_PATH,
-        protocolTimeout: 625000,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-gpu',
-          '--disable-blink-features=AutomationControlled'
-        ],
-        ignoreDefaultArgs: ['--enable-automation']
-      });
+        const browser = await puppeteer.launch({
+          headless: false,
+          executablePath: CHROME_PATH,
+          protocolTimeout: 625000,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-blink-features=AutomationControlled'
+          ],
+          ignoreDefaultArgs: ['--enable-automation']
+        });
 
-      await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY)); // Delay antar browser
+        await delay(BROWSER_LAUNCH_DELAY); // delay antar browser launching
 
-      (async () => {
-        try {
-          let retry = 0;
-          let success = false;
-
-          while (retry < 3 && !success) {
-            try {
-              const page = await preparePage(browser, acc);
-              await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY)); // Delay antar job
-              await runJob(page, uidBatch, acc.uid);
-              markProcessed(acc.raw);
-              success = true;
-              break;
-            } catch (err) {
-              retry++;
-              console.warn(`[${acc.uid}] ❌ Gagal runJob (attempt ${retry}):`, err.message);
-              if (!err.message.includes('Terlogout') || retry >= 3) throw err;
-              console.log(`[${acc.uid}] 🔁 Retry login & ulangi proses...`);
-            }
-          }
-
-          if (!success) throw new Error('Gagal setelah 3x retry');
-        } catch (e) {
-          console.error(`[${acc.uid}] :`, e.message);
-          if (uidBatch.length) {
-            const remainingLines = fs.readFileSync('uid.txt', 'utf8');
-            const line = uidBatch.join('|');
-            fs.writeFileSync('uid.txt', line + '\n' + remainingLines);
-          }
-          appendFileSync('akun-gagal.txt', acc.raw + '\n');
-          const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
-          const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
-          fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
-        } finally {
-          await browser.close();
+        const page = await preparePage(browser, acc);
+        await delay(BROWSER_LAUNCH_DELAY); // delay antar job
+        await runJob(page, uidBatch, acc.uid);
+        markProcessed(acc.raw);
+      } catch (e) {
+        console.error(`[${acc.uid}] :`, e.message);
+        if (uidBatch.length) {
+          const remainingLines = fs.readFileSync('uid.txt', 'utf8');
+          const line = uidBatch.join('|');
+          fs.writeFileSync('uid.txt', line + '\n' + remainingLines);
         }
-      })();
-    }
+        appendFileSync('akun-gagal.txt', acc.raw + '\n');
+        const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
+        const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
+        fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
+      } finally {
+        try {
+          await browser.close();
+        } catch (err) {
+          console.error(`Gagal menutup browser: ${err.message}`);
+        }
+        resolve();
+      }
+    })));
 
-    // Optional: Delay antar batch
-    if (BROWSER_LAUNCH_DELAY) await new Promise(r => setTimeout(r, BROWSER_LAUNCH_DELAY));
+    // Optional delay antar batch
+    if (BROWSER_LAUNCH_DELAY) await delay(BROWSER_LAUNCH_DELAY);
   }
 
   console.log('✅ SELURUH PROSES SELESAI');
