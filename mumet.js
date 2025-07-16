@@ -314,12 +314,11 @@ async function runJob(page, uidList, uidTag) {
     // Jalankan semua akun secara paralel
     await Promise.all(accounts.map((acc, i) => new Promise(async (resolve) => {
       const uidBatch = uidBatches[i];
-      let browser; // <--- Definisikan di sini
+      let browser;
 
       try {
         console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
-
-        await delay(i * BROWSER_LAUNCH_DELAY); // Delay antar akun
+        await delay(i * BROWSER_LAUNCH_DELAY);
 
         browser = await puppeteer.launch({
           headless: false,
@@ -335,26 +334,38 @@ async function runJob(page, uidList, uidTag) {
         });
 
         const page = await preparePage(browser, acc);
-        await delay(BROWSER_LAUNCH_DELAY); // Delay sebelum runJob
-        await runJob(page, uidBatch, acc.uid);
+        await delay(BROWSER_LAUNCH_DELAY);
+
+        const timeoutMs = 7 * 60 * 1000;
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout 7 menit')), timeoutMs)
+        );
+
+        await Promise.race([
+          runJob(page, uidBatch, acc.uid),
+          timeoutPromise
+        ]);
+
         markProcessed(acc.raw);
+        appendFileSync('akun-done.txt', acc.raw + '\n');
 
       } catch (e) {
-        console.error(`[${acc.uid}] :`, e.message);
+        console.error(`${waktu()} [${acc.uid}] :`, e.message);
+        
         if (uidBatch.length) {
           const remainingLines = fs.readFileSync('uid.txt', 'utf8');
           const line = uidBatch.join('|');
           fs.writeFileSync('uid.txt', line + '\n' + remainingLines);
         }
+
         appendFileSync('akun-gagal.txt', acc.raw + '\n');
-        const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
-        const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
-        fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
+
+        // const akunLain = fs.readFileSync('akun.txt', 'utf8').trim();
+        // const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
+        // fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
       } finally {
         try {
-          if (typeof browser !== 'undefined' && browser?.close) {
-            await browser.close();
-          }
+          if (browser?.close) await browser.close();
           console.log(`${waktu()} Browser untuk akun ${acc.uid} ditutup.`);
         } catch (err) {
           console.error(`Gagal menutup browser: ${err.message}`);
