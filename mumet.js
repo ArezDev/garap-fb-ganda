@@ -146,6 +146,14 @@ async function preparePage(browser, acc) {
 }
 
 async function runJob(page, uidList, uidTag) {
+  const currentUrl = page.url();
+  if (currentUrl.includes("601051028565049")) {
+    const log = { uid: uidTag, status: "dismissed", waktu: waktu(), message: "Checkpoint automated behaviour" };
+    appendFileSync('akun-dismiss.txt', `${uidTag}\n`);
+    //appendFileSync('akun-log.jsonl', JSON.stringify(log) + '\n');
+    return; // skip this job but continue others
+  }
+
   await page.evaluate(async () => {
     const myHeaders = new Headers();
     myHeaders.append('content-type', 'application/x-www-form-urlencoded');
@@ -181,8 +189,17 @@ async function runJob(page, uidList, uidTag) {
     }
   });
 
-  try { await page.goto('https://facebook.com/?sk=welcome'); await page.waitForNavigation({ timeout: 15000 }); } catch (_) { }
-  if (!/sk=welcome/.test(page.url())) throw new Error('Switch clone FB gagal');
+  try {
+    await page.goto('https://facebook.com/?sk=welcome');
+    await page.waitForNavigation({ timeout: 15000 });
+  } catch (_) {}
+
+  if (!/sk=welcome/.test(page.url())) {
+    const log = { uid: uidTag, status: "failed", waktu: waktu(), message: "Switch clone FB gagal" };
+    //appendFileSync('akun-log.jsonl', JSON.stringify(log) + '\n');
+    throw new Error('Switch clone FB gagal');
+  }
+
   console.log(`${waktu()}[${uidTag}] : ✅ Clone Login berhasil!`);
   await page.waitForFunction(() => window.arezdev && window.arezdev.createGroups, { timeout: 10000 });
   console.log(`${waktu()}[${uidTag}] : Proses...`);
@@ -194,15 +211,26 @@ async function runJob(page, uidList, uidTag) {
       if (!(t.startsWith(tag + ' done') || t.startsWith('[AREZ] done'))) return;
       page.off('console', listener);
       try {
-        const data = JSON.parse(t.replace(/^\[[^\]]+\] done\s*/, ''));
+        const data = JSON.parse(t.replace(/^[^\]]+\] done\s*/, ''));
         console.log(`${waktu()}${tag}`, data);
+        //appendFileSync('akun-log.jsonl', JSON.stringify({ uid: uidTag, status: "success", waktu: waktu(), data }) + '\n');
         resolve(data);
-      } catch (e) { reject(new Error('Parse JSON done gagal')); }
+      } catch (e) {
+        const errlog = { uid: uidTag, status: "parse_error", waktu: waktu(), message: e.message };
+        //appendFileSync('akun-log.jsonl', JSON.stringify(errlog) + '\n');
+        reject(new Error('Parse JSON done gagal'));
+      }
     };
     page.on('console', listener);
     page.evaluate(async (list, uidTag) => {
       const tag = `[${uidTag}]`;
       const cfg = window.AREZDEV_CONFIG || {};
+      function waktu() {
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        return `[ ${hh}:${mm} ]`;
+      }
       function isLoggedOut() {
         const EMAIL_SEL = ['#email', 'input[name="email"]', 'input[id="m_login_email"]'];
         const PASS_SEL = ['#pass', 'input[name="pass"]', 'input[id="m_login_password"]'];
@@ -211,31 +239,40 @@ async function runJob(page, uidList, uidTag) {
         return (emailFound && passFound);
       }
       try {
-        if (!window.arezdev) return console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: "script tidak tersedia, kemungkinan belum login" })}`);
-        if (isLoggedOut()) return console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: "Terlogout sebelum mulai workflow" })}`);
+        if (!window.arezdev) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "script tidak tersedia, kemungkinan belum login" })}`);
+        if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout sebelum mulai workflow" })}`);
         if (cfg.enableCreateGroups !== false) {
           await window.arezdev.createGroups({ uidList: list, welcomeText: '' });
-          if (isLoggedOut()) return console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: "Terlogout saat createGroups" })}`);
+          if (location.href.includes("601051028565049")) {
+            return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
+          }
+          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat createGroups" })}`);
         }
         if (cfg.enableAddMembersToGroups) {
           await window.arezdev.addMembersToAllGroups({ uidList: list, delay: cfg.delaySec || 1 });
           if (cfg.addMemberWithText && Array.isArray(cfg.welcomeText) && cfg.welcomeText.length) {
             const txt = cfg.welcomeText[Math.floor(Math.random() * cfg.welcomeText.length)];
             if (txt) await window.arezdev.messageAllGroups({ text: txt });
+            if (location.href.includes("601051028565049")) {
+              return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
+            }
           }
-          if (isLoggedOut()) return console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: "Terlogout saat addMembers/message" })}`);
+          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat addMembers/message" })}`);
         }
         if (cfg.enableMessageAllGroups && !cfg.addMemberWithText) {
           if (Array.isArray(cfg.welcomeText) && cfg.welcomeText.length) {
             const txt = cfg.welcomeText[Math.floor(Math.random() * cfg.welcomeText.length)];
             await window.arezdev.messageAllGroups({ text: txt });
+            if (location.href.includes("601051028565049")) {
+              return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Checkpoint automated behaviour", status: "dismissed" })}`);
+            }
           }
-          if (isLoggedOut()) return console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: "Terlogout saat messageAllGroups" })}`);
+          if (isLoggedOut()) return console.log(`${waktu()}${tag} : ${JSON.stringify({ error: "Terlogout saat messageAllGroups" })}`);
         }
         const ctx = window.__arezLast || {};
-        console.log(`${waktu()}[${tag}] : ${JSON.stringify({ task: 'workflow', ...ctx })}`);
+        console.log(`${waktu()}${tag} : ${JSON.stringify({ task: 'workflow', ...ctx })}`);
       } catch (e) {
-        console.log(`${waktu()}[${tag}] : ${JSON.stringify({ error: e.message || 'error tidak diketahui' })}`);
+        console.log(`${waktu()}${tag} : ${JSON.stringify({ error: e.message || 'error tidak diketahui' })}`);
       }
     }, uidList, uidTag).catch(reject);
   });
@@ -255,11 +292,14 @@ async function runJob(page, uidList, uidTag) {
     // Jalankan semua akun secara paralel
     await Promise.all(accounts.map((acc, i) => new Promise(async (resolve) => {
       const uidBatch = uidBatches[i];
+      let browser; // <--- Definisikan di sini
 
       try {
         console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
 
-        const browser = await puppeteer.launch({
+        await delay(i * BROWSER_LAUNCH_DELAY); // Delay antar akun
+
+        browser = await puppeteer.launch({
           headless: false,
           executablePath: CHROME_PATH,
           protocolTimeout: 625000,
@@ -272,12 +312,11 @@ async function runJob(page, uidList, uidTag) {
           ignoreDefaultArgs: ['--enable-automation']
         });
 
-        await delay(BROWSER_LAUNCH_DELAY); // delay antar browser launching
-
         const page = await preparePage(browser, acc);
-        await delay(BROWSER_LAUNCH_DELAY); // delay antar job
+        await delay(BROWSER_LAUNCH_DELAY); // Delay sebelum runJob
         await runJob(page, uidBatch, acc.uid);
         markProcessed(acc.raw);
+
       } catch (e) {
         console.error(`[${acc.uid}] :`, e.message);
         if (uidBatch.length) {
@@ -291,7 +330,10 @@ async function runJob(page, uidList, uidTag) {
         fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
       } finally {
         try {
-          await browser.close();
+          if (typeof browser !== 'undefined' && browser?.close) {
+            await browser.close();
+          }
+          console.log(`${waktu()} Browser untuk akun ${acc.uid} ditutup.`);
         } catch (err) {
           console.error(`Gagal menutup browser: ${err.message}`);
         }

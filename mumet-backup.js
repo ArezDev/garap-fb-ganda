@@ -9,6 +9,7 @@ const CHROME_PATH = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const BROWSER_LAUNCH_DELAY = (globalThis.AREZDEV_CONFIG?.browserLaunchDelaySec ?? 0) * 1000;
 const configCode = fs.readFileSync('./config.js', 'utf8');
 const arezCode = fs.readFileSync('./tools/inboxgrup.js', 'utf8');
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
 const waktu = () => {
   const now = new Date();
   const hh = String(now.getHours()).padStart(2, '0');
@@ -108,21 +109,7 @@ async function preparePage(browser, acc) {
     );
   }
   await page.goto('https://facebook.com/login', { waitUntil: 'domcontentloaded' });
-  if (/login(\.php)?/.test(page.url())) {
-    console.log(`${waktu()}[${uid}] : Cookie kedaluwarsa, login ulang:`);
-    if (!uid || !pass) throw Error('UID/PASS kosong');
-    const { emailSel, passSel } = await findLoginSelectors(page);
-    await page.type(emailSel, uid, { delay: 50 });
-    await page.type(passSel, pass, { delay: 50 });
-    await Promise.all([
-      page.keyboard.press('Enter'),
-      page.waitForNavigation({ waitUntil: 'networkidle2' })
-    ]);
-    if (/login(\.php)?/.test(page.url()))
-      throw Error('Login gagal – cek password atau checkpoint');
-    await new Promise(res => setTimeout(res, 15000));
-  }
-  if (/601051028565049/.test(page.url())) {
+  if (page.url().includes("601051028565049")) {
     console.log(`${waktu()}[${uid}]`, 'Akun dismiss, wait...');
     await page.evaluate(() => {
       fetch("/api/graphql/", {
@@ -140,7 +127,18 @@ async function preparePage(browser, acc) {
         "redirect": "follow"
       });
     });
-    await new Promise(res => setTimeout(res, 15000));
+  } else if (/login(\.php)?/.test(page.url())) {
+    console.log(`${waktu()}[${uid}] : Cookie kedaluwarsa, login ulang:`);
+    if (!uid || !pass) throw Error('UID/PASS kosong');
+    const { emailSel, passSel } = await findLoginSelectors(page);
+    await page.type(emailSel, uid, { delay: 50 });
+    await page.type(passSel, pass, { delay: 50 });
+    await Promise.all([
+      page.keyboard.press('Enter'),
+      page.waitForNavigation({ waitUntil: 'networkidle2' })
+    ]);
+    if (/login(\.php)?/.test(page.url()))
+      throw Error('Login gagal – cek password atau checkpoint');
   }
   
   await new Promise(res => setTimeout(res, 15000));
@@ -203,6 +201,12 @@ async function runJob(page, uidList, uidTag) {
     };
     page.on('console', listener);
     page.evaluate(async (list, uidTag) => {
+      const waktu = () => {
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        return `[ ${hh}:${mm} ]`;
+      };
       const tag = `[${uidTag}]`;
       const cfg = window.AREZDEV_CONFIG || {};
       function isLoggedOut() {
@@ -254,42 +258,34 @@ async function runJob(page, uidList, uidTag) {
 
     const uidBatches = collectUIDsPerAccount(accounts.length);
 
-    await Promise.all(accounts.map(async (acc, i) => {
+    // Jalankan semua akun secara paralel
+    await Promise.all(accounts.map((acc, i) => new Promise(async (resolve) => {
       const uidBatch = uidBatches[i];
-      const browser = await puppeteer.launch({
-        headless: false,
-        executablePath: CHROME_PATH,
-        protocolTimeout: 625000,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-gpu',
-          '--disable-blink-features=AutomationControlled'
-        ],
-        ignoreDefaultArgs: ['--enable-automation']
-      });
-
-      await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY));
+      let browser; // <--- Definisikan di sini
 
       try {
-        let retry = 0;
-        let success = false;
-        while (retry < 3 && !success) {
-          try {
-            const page = await preparePage(browser, acc);
-            await new Promise(res => setTimeout(res, BROWSER_LAUNCH_DELAY));
-            await runJob(page, uidBatch, acc.uid);
-            markProcessed(acc.raw);
-            success = true;
-            break;
-          } catch (err) {
-            retry++;
-            console.warn(`[${acc.uid}] ❌ Gagal runJob (attempt ${retry}):`, err.message);
-            if (!err.message.includes('Terlogout') || retry >= 3) throw err;
-            console.log(`[${acc.uid}] 🔁 Retry login & ulangi proses...`);
-          }
-        }
-        if (!success) throw new Error('Gagal setelah 3x retry');
+        console.log(`${waktu()} Membuka browser untuk akun: ${acc.uid}`);
+
+        await delay(i * BROWSER_LAUNCH_DELAY); // Delay antar akun
+
+        browser = await puppeteer.launch({
+          headless: false,
+          executablePath: CHROME_PATH,
+          protocolTimeout: 625000,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-blink-features=AutomationControlled'
+          ],
+          ignoreDefaultArgs: ['--enable-automation']
+        });
+
+        const page = await preparePage(browser, acc);
+        await delay(BROWSER_LAUNCH_DELAY); // Delay sebelum runJob
+        await runJob(page, uidBatch, acc.uid);
+        markProcessed(acc.raw);
+
       } catch (e) {
         console.error(`[${acc.uid}] :`, e.message);
         if (uidBatch.length) {
@@ -302,12 +298,20 @@ async function runJob(page, uidList, uidTag) {
         const akunBaru = acc.raw + '\n' + (akunLain ? akunLain + '\n' : '');
         fs.writeFileSync('akun.txt', akunBaru.trim() + '\n');
       } finally {
-        await browser.close();
+        try {
+          if (typeof browser !== 'undefined' && browser?.close) {
+            await browser.close();
+          }
+          console.log(`${waktu()} Browser untuk akun ${acc.uid} ditutup.`);
+        } catch (err) {
+          console.error(`Gagal menutup browser: ${err.message}`);
+        }
+        resolve();
       }
-    }));
+    })));
 
     // Optional delay antar batch
-    if (BROWSER_LAUNCH_DELAY) await new Promise(r => setTimeout(r, BROWSER_LAUNCH_DELAY));
+    if (BROWSER_LAUNCH_DELAY) await delay(BROWSER_LAUNCH_DELAY);
   }
 
   console.log('✅ SELURUH PROSES SELESAI');
