@@ -109,7 +109,7 @@ async function preparePage(browser, acc) {
     );
   }
   await page.goto('https://facebook.com/login', { waitUntil: 'domcontentloaded' });
-  if (/601051028565049?/.test(page.url())) {
+  if (page.url().includes("601051028565049")) {
     console.log(`${waktu()}[${uid}]`, 'Akun dismiss, wait...');
     await page.evaluate(() => {
       fetch("/api/graphql/", {
